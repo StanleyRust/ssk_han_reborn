@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using BepInEx;
+using System.Text.RegularExpressions;
 
 namespace SskCnPoc;
 
@@ -23,7 +24,14 @@ internal static class MissingCollector
         ("(", "%):"),
         ("(", "%)"),
         (" v", ""),
+        (" ", " points"),
+        (" ", " coins"),
+        (" ", "%"),
+        (": ", ""),
     };
+
+    // 用于替换数字的正则（用于将动态数字替换为占位符）
+    private static readonly Regex _numberRegex = new(@"\d{1,6}(?:[\.,]\d+)?", RegexOptions.Compiled);
 
     /// <summary>
     /// 收集未翻译的文本
@@ -57,8 +65,11 @@ internal static class MissingCollector
     private static bool ShouldCollect(string s)
     {
         if (s.All(char.IsWhiteSpace)) return false;
-        if (s.Length <= 1) return false;
+        if (s.Length <= 1) return false; // 单字符通常为按键绑定或其他非翻译项
         if (IsResolutionFormat(s)) return false;
+
+        // 跳过类似于 URL / 资源路径的字符串
+        if (s.Contains("/") || s.Contains("\\")) return false;
 
         bool allDigitOrPunct = true;
         foreach (char c in s)
@@ -92,9 +103,11 @@ internal static class MissingCollector
 
     /// <summary>
     /// 规范化动态文本：将动态参数替换为 {0} 占位符
+    /// 增强逻辑：使用正则替换数字序列，限定替换次数以避免过度泛化
     /// </summary>
     private static string NormalizeDynamicText(string text)
     {
+        // 1) 先使用常见前后缀规则尝试快速规范化
         foreach (var (prefix, suffix) in DynamicPatterns)
         {
             int prefixIdx = text.IndexOf(prefix, StringComparison.Ordinal);
@@ -128,7 +141,26 @@ internal static class MissingCollector
                 }
             }
         }
-        
+
+        // 2) 使用数字正则进行替换（限制匹配次数，最多替换3个数字段），以保持可辨识性
+        var matches = _numberRegex.Matches(text);
+        if (matches.Count > 0 && matches.Count <= 3)
+        {
+            var sb = new StringBuilder();
+            int lastIdx = 0;
+            int replIndex = 0;
+            foreach (Match m in matches)
+            {
+                sb.Append(text.Substring(lastIdx, m.Index - lastIdx));
+                sb.Append("{" + replIndex + "}");
+                lastIdx = m.Index + m.Length;
+                replIndex++;
+            }
+            sb.Append(text.Substring(lastIdx));
+            return sb.ToString();
+        }
+
+        // 3) 不满足上述条件时，返回原文（后续将作为完整条目保存）
         return text;
     }
 
